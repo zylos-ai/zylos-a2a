@@ -27,6 +27,10 @@ import { RateLimiter, appendAudit, authenticate, isTrusted, resolveSafeUrl } fro
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' };
 const ROBOTS_HEADERS = { 'X-Robots-Tag': 'noindex, nofollow' };
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9._:-]{1,256}$/;
+const UUID_PATTERN = '[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}';
+const INVITATION_ID_PATTERN = new RegExp(`^invite-${UUID_PATTERN}$`);
+const AGENT_ID_PATTERN = new RegExp(`^agent-${UUID_PATTERN}$`);
+const PAIRING_HEADERS = { 'Cache-Control': 'no-store' };
 
 function sendJson(response, status, body, headers = {}) {
   const encoded = JSON.stringify(body);
@@ -167,7 +171,96 @@ export function createA2AServer({
   deliverPush = deliverTaskPush,
 } = {}) {
   const limiter = new RateLimiter(config.auth.rateLimitPerMinute);
-  const card = () => buildAgentCard(config);
+  const pairingIpLimiter = new RateLimiter(600, 10_000);
+  const pairingInvitationLimiter = new RateLimiter(20, 10_000);
+  const card = () => buildAgentCard(config, { requireAuthentication: store.hasBoundPeers() });
+
+  async function handlePairingRedemption(request, response) {
+    const clientIp = request.socket.remoteAddress || 'unknown';
+    if (!pairingIpLimiter.allow(clientIp)) {
+      return sendJson(response, 429, { error: 'pairing rate limit exceeded' }, {
+        ...PAIRING_HEADERS, 'Retry-After': '60',
+      });
+    }
+    const body = await readJson(request, Math.min(config.server.maxBodyBytes, 65_536));
+    if (!body || typeof body !== 'object' || Array.isArray(body)
+      || !INVITATION_ID_PATTERN.test(String(body.invitationId || ''))
+      || !/^[A-Za-z0-9_-]{40,128}$/.test(String(body.secret || ''))) {
+      throw new RpcError(ERRORS.INVALID_PARAMS, 'invalid pairing request');
+    }
+    if (!pairingInvitationLimiter.allow(`${clientIp}:${body.invitationId}`)) {
+      return sendJson(response, 429, { error: 'pairing rate limit exceeded' }, {
+        ...PAIRING_HEADERS, 'Retry-After': '60',
+      });
+    }
+    const peer = body.peer;
+    const peerCard = peer?.card;
+    if (!peer || typeof peer !== 'object' || Array.isArray(peer)
+      || !peerCard || typeof peerCard !== 'object' || Array.isArray(peerCard)) {
+      throw new RpcError(ERRORS.INVALID_PARAMS, 'invalid pairing invitation or peer identity');
+    }
+    const peerId = String(peer.agentId || '');
+    if (!AGENT_ID_PATTERN.test(peerId)) {
+      throw new RpcError(ERRORS.INVALID_PARAMS, 'invalid pairing invitation or peer identity');
+    }
+    const peerName = String(peerCard.name || peer.name || '').trim().slice(0, 128);
+    if (!peerName || /[\u0000-\u001f\u007f]/.test(peerName)) {
+      throw new RpcError(ERRORS.INVALID_PARAMS, 'invalid pairing invitation or peer identity');
+    }
+    const peerInterface = Array.isArray(peerCard.supportedInterfaces)
+      ? peerCard.supportedInterfaces.find(
+        (item) => item?.protocolBinding === 'JSONRPC' && typeof item.url === 'string',
+      )
+      : null;
+    if (!peerInterface) throw new RpcError(ERRORS.INVALID_PARAMS, 'invalid pairing invitation or peer identity');
+    try {
+      const peerUrl = new URL(peerInterface.url);
+      if (!['http:', 'https:'].includes(peerUrl.protocol) || peerUrl.username || peerUrl.password) {
+        throw new Error('invalid URL');
+      }
+    } catch {
+      throw new RpcError(ERRORS.INVALID_PARAMS, 'invalid pairing invitation or peer identity');
+    }
+    const result = store.redeemPairingInvitation({
+      id: String(body.invitationId || ''),
+      secret: String(body.secret || ''),
+      peerId,
+      peerName,
+      card: peerCard,
+    });
+    if (!result) throw new RpcError(ERRORS.INVALID_PARAMS, 'invalid, expired, or already bound pairing invitation');
+    try {
+      appendAudit(config.paths.auditPath, {
+        direction: 'pairing',
+        peer: peerId,
+        taskId: result.invitation.id,
+        outcome: 'bound',
+        summary: 'one-time invitation bound',
+      });
+    } catch (error) {
+      console.error(`A2A pairing audit failed: ${error.stack || error.message}`);
+    }
+    return sendJson(response, 200, {
+      agentId: store.getOrCreateAgentId(),
+      card: card(),
+      token: result.token,
+      boundAt: result.invitation.boundAt,
+    }, PAIRING_HEADERS);
+  }
+
+  async function handlePairingRequest(request, response) {
+    try {
+      return await handlePairingRedemption(request, response);
+    } catch (error) {
+      if (!(error instanceof RpcError)) console.error(`A2A pairing failed: ${error.stack || error.message}`);
+      return sendJson(
+        response,
+        error instanceof RpcError ? 400 : 500,
+        { error: 'pairing request was rejected' },
+        PAIRING_HEADERS,
+      );
+    }
+  }
 
   async function prepareTask(params, peer, canonical) {
     if (!params || typeof params !== 'object' || Array.isArray(params)) throw new RpcError(ERRORS.INVALID_PARAMS, 'params must be an object');
@@ -464,12 +557,27 @@ export function createA2AServer({
         response.writeHead(200, { ...ROBOTS_HEADERS, 'Content-Type': 'text/plain; charset=utf-8', 'Content-Length': Buffer.byteLength(body) });
         return response.end(body);
       }
+      if (request.method === 'POST' && url.pathname === '/pairing/redeem') {
+        return handlePairingRequest(request, response);
+      }
 
       const isProxied = ['x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto', 'x-forwarded-prefix']
         .some((header) => request.headers[header] !== undefined);
-      const peer = authenticate(config, request.headers.authorization, request.socket.remoteAddress, isProxied);
+      let boundCredentialPeer = '';
+      const peer = authenticate(
+        config,
+        request.headers.authorization,
+        request.socket.remoteAddress,
+        isProxied,
+        (token) => {
+          boundCredentialPeer = store.authenticateBoundPeer(token);
+          return boundCredentialPeer;
+        },
+      );
       if (!peer) return sendJson(response, 401, jsonRpcError(null, ERRORS.UNAUTHORIZED, 'unauthorized'), { 'WWW-Authenticate': 'Bearer' });
-      if (!isTrusted(config, peer)) return sendJson(response, 403, jsonRpcError(null, ERRORS.UNTRUSTED_PEER, 'peer is not trusted'));
+      if (!boundCredentialPeer && !isTrusted(config, peer)) {
+        return sendJson(response, 403, jsonRpcError(null, ERRORS.UNTRUSTED_PEER, 'peer is not trusted'));
+      }
       if (!limiter.allow(peer)) return sendJson(response, 429, jsonRpcError(null, ERRORS.RATE_LIMITED, 'rate limit exceeded'), { 'Retry-After': '60' });
       if (request.method === 'GET' && url.pathname === '/health') {
         return sendJson(response, 200, { ok: true, service: 'zylos-a2a' });

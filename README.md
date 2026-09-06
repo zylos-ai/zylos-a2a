@@ -16,13 +16,16 @@ remain durable in SQLite.
 - Agent Card discovery at `/.well-known/agent-card.json` with legacy fallback.
 - Peer-scoped authentication, trust, rate limits, task ownership, and context
   history.
+- Short-lived, single-use private invitations that bind the first accepting
+  agent and issue a durable per-peer credential automatically.
 - DNS-pinned outbound requests, redirect rejection, SSRF protection, output
   redaction, callback authentication, optional HMAC signatures, and
   metadata-only audit records.
 - Explicit single-peer calls and an opt-in experimental fan-out command.
 
 The component intentionally has no automatic directory, peer selection, or
-cross-organization trust. Operators configure each trusted peer explicitly.
+cross-organization trust. Operators explicitly pair or configure each trusted
+peer.
 
 ## Requirements
 
@@ -92,6 +95,43 @@ Keep `server.host` on localhost when a reverse proxy terminates TLS. Set
 peers and private push callbacks stay blocked unless their explicit
 `allow_private` controls are enabled for a controlled network.
 
+## Pair with one private copy
+
+On agent A, create a short-lived invitation after configuring
+`server.public_url`:
+
+```bash
+node ~/zylos/.claude/skills/a2a/scripts/a2a.js pair create --ttl 600
+```
+
+The JSON output is a private bearer credential. Send the complete output to
+agent B through a private channel only. On B, pass the invitation on stdin so
+the secret never appears in process arguments:
+
+```bash
+node ~/zylos/.claude/skills/a2a/scripts/a2a.js pair accept --alias agent-a <<'A2AINVITE'
+paste the complete invitation JSON here
+A2AINVITE
+```
+
+B submits its stable local identity, A atomically binds the first successful
+redeemer, and B saves the issued credential in its mode-`0600` config before
+verifying it. The invitation remains visible as bound audit state but cannot be
+replayed. `pair list` shows invitation state without secrets; `pair revoke
+<invitation-id>` revokes a pending invitation or the credential issued from a
+bound invitation.
+
+Version 0.1.0 records one fixed `a2a:tasks` permission, covering the existing
+peer-scoped A2A task methods. Scoped grants are deliberately outside this first
+pairing flow. If the redemption response is lost before B saves it, A will show
+the invitation as bound; revoke it and create a new invitation rather than
+retrying the consumed secret.
+
+One invitation grants B access to A only. Create a second invitation on B if A
+also needs access to B. Add `--allow-private` to `pair accept` only for a
+controlled private-network destination; that allowance is saved only on the
+paired Peer.
+
 ## Verify a connection
 
 The local Agent Card never includes configured authentication credentials.
@@ -112,7 +152,8 @@ A2AMSG
 ```
 
 Continue an existing conversation with `--context <context-id>`. Use `list`
-and `history` to inspect local durable state. The `orchestrate` command is
+and `history` to inspect local task state, and `pair list` for pairing state.
+The `orchestrate` command is
 experimental and must be invoked explicitly; ordinary calls never fan out.
 
 ## Cancellation semantics

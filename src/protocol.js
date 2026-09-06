@@ -226,7 +226,7 @@ export function sendMessageResult(task, canonical) {
   return canonical ? { task } : task;
 }
 
-export function buildAgentCard(config) {
+export function buildAgentCard(config, { requireAuthentication = false } = {}) {
   const baseUrl = config.server.publicUrl || `http://${config.server.host}:${config.server.port}`;
   const url = `${baseUrl.replace(/\/$/, '')}/`;
   const card = {
@@ -256,7 +256,7 @@ export function buildAgentCard(config) {
       tags: ['general'],
     }],
   };
-  if (config.auth.bearerToken || Object.keys(config.auth.peerTokens).length > 0) {
+  if (requireAuthentication || config.auth.bearerToken || Object.keys(config.auth.peerTokens).length > 0) {
     card.securitySchemes = {
       bearer: {
         httpAuthSecurityScheme: {

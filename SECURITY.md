@@ -19,6 +19,17 @@ the smallest safe reproduction you can provide.
 - Keep the service on localhost behind a trusted TLS proxy, or on a controlled
   private network with explicit private-address allowances.
 - Share the `card` command output when pairing; never share `config.json`.
+- Treat `pair create` output as a private bearer credential: keep its lifetime
+  short, transfer it only through a private channel, and accept it through
+  stdin. The first successful redeemer wins and the invitation cannot be
+  replayed.
+- A pairing invitation grants access only from the accepting agent to the
+  inviting agent. Reverse access requires a separate invitation. Revoke an
+  accidentally exposed invitation immediately with `pair revoke`.
+- The initial pairing profile records the fixed `a2a:tasks` permission and
+  grants the existing peer-scoped task surface; it does not provide method-level
+  grants. If a redemption response is lost, revoke the bound invitation and
+  create a new one instead of retrying the consumed secret.
 - Review `audit.jsonl` before sharing it. The component records metadata only,
   but peer identifiers and task IDs may still be operationally sensitive.
 - Running-task cancellation is not an execution interrupt until Zylos Core can

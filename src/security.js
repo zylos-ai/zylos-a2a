@@ -32,19 +32,22 @@ function tokenEquals(left, right) {
   return crypto.timingSafeEqual(a, b);
 }
 
-export function authenticate(config, authorization, clientIp = '', isProxied = false) {
+export function authenticate(config, authorization, clientIp = '', isProxied = false, resolveBoundPeer = () => '') {
   const entries = Object.entries(config.auth.peerTokens);
   const hasAuth = Boolean(config.auth.bearerToken || entries.length > 0);
-  if (!hasAuth) return isProxied ? null : `ip:${clientIp || 'local'}`;
   const match = /^Bearer\s+(.+)$/i.exec(authorization || '');
-  if (!match) return null;
-  const presented = match[1].trim();
-  for (const [peer, token] of entries) {
-    if (tokenEquals(presented, token)) return peer;
+  if (match) {
+    const presented = match[1].trim();
+    for (const [peer, token] of entries) {
+      if (tokenEquals(presented, token)) return peer;
+    }
+    if (config.auth.bearerToken && tokenEquals(presented, config.auth.bearerToken)) {
+      return `ip:${clientIp || 'unknown'}`;
+    }
+    const boundPeer = resolveBoundPeer(presented);
+    if (boundPeer) return boundPeer;
   }
-  if (config.auth.bearerToken && tokenEquals(presented, config.auth.bearerToken)) {
-    return `ip:${clientIp || 'unknown'}`;
-  }
+  if (!hasAuth && !match) return isProxied ? null : `ip:${clientIp || 'local'}`;
   return null;
 }
 
@@ -53,13 +56,22 @@ export function isTrusted(config, peer) {
 }
 
 export class RateLimiter {
-  constructor(limitPerMinute) {
+  constructor(limitPerMinute, maxBuckets = 10_000) {
     this.limit = limitPerMinute;
+    this.maxBuckets = maxBuckets;
     this.buckets = new Map();
   }
 
   allow(identity, currentMs = Date.now()) {
     const cutoff = currentMs - 60_000;
+    if (!this.buckets.has(identity) && this.buckets.size >= this.maxBuckets) {
+      for (const [key, values] of this.buckets) {
+        if (values.every((value) => value <= cutoff)) this.buckets.delete(key);
+      }
+      while (this.buckets.size >= this.maxBuckets) {
+        this.buckets.delete(this.buckets.keys().next().value);
+      }
+    }
     const bucket = (this.buckets.get(identity) ?? []).filter((value) => value > cutoff);
     if (bucket.length >= this.limit) {
       this.buckets.set(identity, bucket);

@@ -1,11 +1,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { SETTLED_STATES, STATES, TERMINAL_STATES, nowIso } from './protocol.js';
 
 const ACTIVE_STATES = [STATES.SUBMITTED, STATES.WORKING];
 const CONTEXT_TTL_MS = 3_600_000;
+const INVITATION_TTL_SECONDS = 600;
+export const PAIRING_PERMISSIONS = Object.freeze(['a2a:tasks']);
 const PUSH_TABLE_SQL = `
   CREATE TABLE push_configs (
     config_id TEXT PRIMARY KEY,
@@ -53,6 +55,31 @@ function mapPushConfig(row, { includeCredentials = true } = {}) {
     }
   }
   return config;
+}
+
+function secretHash(value) {
+  return createHash('sha256').update(String(value)).digest();
+}
+
+function secretMatches(value, expectedHex) {
+  const actual = secretHash(value);
+  const expected = Buffer.from(expectedHex, 'hex');
+  return expected.length === actual.length && timingSafeEqual(actual, expected);
+}
+
+function mapPairingInvitation(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    status: row.status,
+    createdAt: row.created_at,
+    expiresAt: row.expires_at,
+    permissions: JSON.parse(row.permissions_json),
+    boundPeerId: row.bound_peer_id,
+    boundPeerName: row.bound_peer_name,
+    boundAt: row.bound_at,
+    revokedAt: row.revoked_at,
+  };
 }
 
 function encodePageToken(row) {
@@ -120,6 +147,34 @@ export class TaskStore {
         FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE SET NULL
       );
       CREATE INDEX IF NOT EXISTS messages_context ON messages(peer, context_id, id DESC);
+      CREATE TABLE IF NOT EXISTS component_metadata (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS pairing_invitations (
+        id TEXT PRIMARY KEY,
+        secret_hash TEXT NOT NULL,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        permissions_json TEXT NOT NULL,
+        bound_peer_id TEXT NOT NULL DEFAULT '',
+        bound_peer_name TEXT NOT NULL DEFAULT '',
+        bound_card_json TEXT NOT NULL DEFAULT '',
+        bound_at TEXT,
+        revoked_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS pairing_invitations_status_expires
+        ON pairing_invitations(status, expires_at);
+      CREATE TABLE IF NOT EXISTS peer_credentials (
+        peer_id TEXT PRIMARY KEY,
+        peer_name TEXT NOT NULL,
+        token_hash TEXT NOT NULL UNIQUE,
+        card_json TEXT NOT NULL,
+        invitation_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        revoked_at TEXT
+      );
     `);
     const messageColumns = new Set(this.database.prepare('PRAGMA table_info(messages)').all().map((row) => row.name));
     if (!messageColumns.has('message_id')) {
@@ -160,6 +215,140 @@ export class TaskStore {
         CREATE INDEX push_configs_task ON push_configs(task_id, peer);
         COMMIT;
       `);
+    } catch (error) {
+      this.database.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
+  getOrCreateAgentId() {
+    const existing = this.database.prepare("SELECT value FROM component_metadata WHERE key = 'agent_id'").get();
+    if (existing) return existing.value;
+    const agentId = `agent-${randomUUID()}`;
+    this.database.prepare("INSERT OR IGNORE INTO component_metadata (key, value) VALUES ('agent_id', ?)").run(agentId);
+    return this.database.prepare("SELECT value FROM component_metadata WHERE key = 'agent_id'").get().value;
+  }
+
+  createPairingInvitation({ ttlSeconds = INVITATION_TTL_SECONDS, currentMs = Date.now() } = {}) {
+    const ttl = Math.max(60, Math.min(Number(ttlSeconds) || INVITATION_TTL_SECONDS, 3_600));
+    const id = `invite-${randomUUID()}`;
+    const secret = randomBytes(32).toString('base64url');
+    const createdAt = new Date(currentMs).toISOString();
+    const expiresAt = new Date(currentMs + ttl * 1_000).toISOString();
+    this.database.prepare(`
+      INSERT INTO pairing_invitations (id, secret_hash, status, created_at, expires_at, permissions_json)
+      VALUES (?, ?, 'pending', ?, ?, ?)
+    `).run(id, secretHash(secret).toString('hex'), createdAt, expiresAt, JSON.stringify(PAIRING_PERMISSIONS));
+    return {
+      id, secret, status: 'pending', createdAt, expiresAt, permissions: [...PAIRING_PERMISSIONS],
+    };
+  }
+
+  redeemPairingInvitation({ id, secret, peerId, peerName, card }, currentMs = Date.now()) {
+    const timestamp = new Date(currentMs).toISOString();
+    const peerToken = randomBytes(32).toString('base64url');
+    this.database.exec('BEGIN IMMEDIATE');
+    try {
+      const invitation = this.database.prepare('SELECT * FROM pairing_invitations WHERE id = ?').get(id);
+      if (!invitation || invitation.status !== 'pending' || !secretMatches(secret, invitation.secret_hash)) {
+        this.database.exec('COMMIT');
+        return null;
+      }
+      if (Date.parse(invitation.expires_at) <= currentMs) {
+        this.database.prepare("UPDATE pairing_invitations SET status = 'expired' WHERE id = ? AND status = 'pending'").run(id);
+        this.database.exec('COMMIT');
+        return null;
+      }
+      const cardJson = JSON.stringify(card);
+      const credential = this.database.prepare(`
+        INSERT INTO peer_credentials (
+          peer_id, peer_name, token_hash, card_json, invitation_id, created_at, revoked_at
+        ) VALUES (?, ?, ?, ?, ?, ?, NULL)
+        ON CONFLICT(peer_id) DO UPDATE SET
+          peer_name = excluded.peer_name,
+          token_hash = excluded.token_hash,
+          card_json = excluded.card_json,
+          invitation_id = excluded.invitation_id,
+          created_at = excluded.created_at,
+          revoked_at = NULL
+        WHERE peer_credentials.revoked_at IS NOT NULL
+      `).run(peerId, peerName, secretHash(peerToken).toString('hex'), cardJson, id, timestamp);
+      if (credential.changes !== 1) {
+        this.database.exec('COMMIT');
+        return null;
+      }
+      const updated = this.database.prepare(`
+        UPDATE pairing_invitations
+        SET status = 'bound', bound_peer_id = ?, bound_peer_name = ?, bound_card_json = ?, bound_at = ?
+        WHERE id = ? AND status = 'pending'
+      `).run(peerId, peerName, cardJson, timestamp, id);
+      if (updated.changes !== 1) throw new Error('pairing invitation changed during binding');
+      this.database.exec('COMMIT');
+      return { invitation: this.getPairingInvitation(id), token: peerToken };
+    } catch (error) {
+      this.database.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
+  authenticateBoundPeer(token) {
+    if (!token) return '';
+    const row = this.database.prepare('SELECT peer_id FROM peer_credentials WHERE token_hash = ? AND revoked_at IS NULL')
+      .get(secretHash(token).toString('hex'));
+    return row?.peer_id || '';
+  }
+
+  isBoundPeer(peerId) {
+    return Boolean(this.database.prepare('SELECT 1 FROM peer_credentials WHERE peer_id = ? AND revoked_at IS NULL').get(peerId));
+  }
+
+  hasBoundPeers() {
+    return Boolean(this.database.prepare('SELECT 1 FROM peer_credentials WHERE revoked_at IS NULL LIMIT 1').get());
+  }
+
+  getPairingInvitation(id) {
+    return mapPairingInvitation(this.database.prepare('SELECT * FROM pairing_invitations WHERE id = ?').get(id));
+  }
+
+  expirePairingInvitations(currentMs = Date.now()) {
+    const timestamp = new Date(currentMs).toISOString();
+    return this.database.prepare(`
+      UPDATE pairing_invitations
+      SET status = 'expired'
+      WHERE status = 'pending' AND expires_at <= ?
+    `).run(timestamp).changes;
+  }
+
+  listPairingInvitations(currentMs = Date.now()) {
+    this.expirePairingInvitations(currentMs);
+    return this.database.prepare('SELECT * FROM pairing_invitations ORDER BY created_at DESC, id DESC').all()
+      .map(mapPairingInvitation);
+  }
+
+  revokePairingInvitation(id) {
+    const timestamp = nowIso();
+    this.database.exec('BEGIN IMMEDIATE');
+    try {
+      this.database.prepare(`
+        UPDATE pairing_invitations
+        SET status = 'expired'
+        WHERE id = ? AND status = 'pending' AND expires_at <= ?
+      `).run(id, timestamp);
+      const invitation = this.database.prepare('SELECT * FROM pairing_invitations WHERE id = ?').get(id);
+      if (!invitation) {
+        this.database.exec('COMMIT');
+        return null;
+      }
+      if (invitation.status === 'pending') {
+        this.database.prepare("UPDATE pairing_invitations SET status = 'revoked', revoked_at = ? WHERE id = ? AND status = 'pending'")
+          .run(timestamp, id);
+      } else if (invitation.status === 'bound' && !invitation.revoked_at) {
+        this.database.prepare('UPDATE pairing_invitations SET revoked_at = ? WHERE id = ?').run(timestamp, id);
+        this.database.prepare('UPDATE peer_credentials SET revoked_at = ? WHERE invitation_id = ? AND revoked_at IS NULL')
+          .run(timestamp, id);
+      }
+      this.database.exec('COMMIT');
+      return this.getPairingInvitation(id);
     } catch (error) {
       this.database.exec('ROLLBACK');
       throw error;

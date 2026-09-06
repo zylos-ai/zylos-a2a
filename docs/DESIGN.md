@@ -23,7 +23,8 @@ creating a cloned agent.
 ## Module boundaries
 
 - `protocol.js`: A2A wire objects, state names, method aliases, and JSON-RPC.
-- `store.js`: SQLite task, context, history, and push-config state.
+- `store.js`: SQLite task, context, history, push-config, pairing, and issued
+  credential state.
 - `security.js`: authentication, trust, rate limits, prompt isolation,
   outbound redaction, audit, signatures, and URL resolution policy.
 - `c4.js`: shell-free inbound dispatch to the C4 receive interface.
@@ -53,6 +54,15 @@ DNS results are checked before outbound calls and the selected address is
 pinned into the HTTP connection, preventing a second DNS lookup from changing
 the destination after SSRF validation. Redirects are not followed.
 
+Pairing invitations are high-entropy, short-lived bearer capabilities stored
+only as hashes. `BEGIN IMMEDIATE` makes the pending-to-bound transition and
+credential issuance a single SQLite transaction, so concurrent redeemers
+cannot both win. The bound identity, time, and revocation state are retained;
+long-lived issued credentials are also hashed at rest. Pairing deliberately
+establishes only one-way access. The initial permission profile is the explicit
+fixed grant `a2a:tasks`, covering the existing peer-scoped task surface; scoped
+grants are deferred.
+
 ## Honest cancellation
 
 The store distinguishes queued cancellation from a running cancellation
@@ -71,10 +81,10 @@ first component boundary. Agent Card skills are explicit configuration because
 Zylos does not currently expose a stable live capability registry to components.
 
 Organization-level discovery belongs to an Agent Directory above this
-transport, after direct peering is proven. The initial deployment exchanges
-public Agent Cards and addresses manually, configures each trusted peer
-privately, resolves one requested peer, validates its Card, and calls it.
-Feishu can carry the public discovery information but never bearer credentials.
+transport, after direct peering is proven. The initial deployment uses either
+explicit configuration or a private single-use invitation, resolves one
+requested peer, validates its Card, and calls it. Public Agent Cards may be
+shared broadly; pairing invitations and bearer credentials may not.
 `orchestrate` remains an explicit experiment for user-requested fan-out and is
 the last delivery phase; ordinary routing must not invoke it automatically.
 Before production fan-out, add concurrency and fan-out limits, budget policy,
