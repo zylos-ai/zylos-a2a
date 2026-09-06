@@ -130,8 +130,9 @@ Agent 代为应用相同设置。
 ```
 
 由反向代理终止 TLS 时，`server.host` 应继续保持本机监听，
-`server.public_url` 填写外部可访问的 A2A 根地址。私网 Peer 和私网 Push
-回调默认禁止；只有在受控网络中才应显式开启对应 `allow_private` 配置。
+`server.public_url` 填写外部可访问的 A2A 根地址。受控私网允许使用 HTTP；
+流量经过不受信任网络时应使用 HTTPS。私网 Peer 和私网 Push 回调默认禁止；
+只有在受控网络中才应显式开启对应 `allow_private` 配置。
 
 ## 开发与排障 CLI
 

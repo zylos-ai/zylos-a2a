@@ -143,9 +143,10 @@ tokens in each direction and exchange them only through a private channel.
 ```
 
 Keep `server.host` on localhost when a reverse proxy terminates TLS. Set
-`server.public_url` to the externally reachable A2A root. Direct private-IP
-peers and private push callbacks stay blocked unless their explicit
-`allow_private` controls are enabled for a controlled network.
+`server.public_url` to the externally reachable A2A root. HTTP is accepted for
+controlled private networks; use HTTPS whenever traffic crosses an untrusted
+network. Direct private-IP peers and private push callbacks stay blocked unless
+their explicit `allow_private` controls are enabled for a controlled network.
 
 ## Developer and troubleshooting CLI
 

@@ -49,15 +49,13 @@ function boundedInteger(value, fallback, minimum, maximum) {
   return Number.isInteger(number) && number >= minimum && number <= maximum ? number : fallback;
 }
 
-function publicUrl(value, label, { requireTls = false } = {}) {
+function publicUrl(value, label) {
   if (!value) return '';
   const url = new URL(String(value));
   if (!['http:', 'https:'].includes(url.protocol)) throw new Error(`${label} must use http or https`);
   if (url.username || url.password || url.search || url.hash) {
     throw new Error(`${label} must not contain credentials, query parameters, or fragments`);
   }
-  const isLoopback = ['127.0.0.1', '::1', 'localhost'].includes(url.hostname);
-  if (requireTls && url.protocol !== 'https:' && !isLoopback) throw new Error(`${label} must use https outside localhost`);
   return url.href.replace(/\/$/, '');
 }
 
@@ -88,7 +86,7 @@ export function normalizeConfig(raw = {}, options = {}) {
     server: {
       host: String(server.host || DEFAULT_CONFIG.server.host),
       port: boundedInteger(server.port, DEFAULT_CONFIG.server.port, 1, 65_535),
-      publicUrl: publicUrl(server.public_url, 'server.public_url', { requireTls: true }),
+      publicUrl: publicUrl(server.public_url, 'server.public_url'),
       requestTimeoutMs: boundedInteger(server.request_timeout_ms, DEFAULT_CONFIG.server.request_timeout_ms, 1_000, 900_000),
       maxBodyBytes: boundedInteger(server.max_body_bytes, DEFAULT_CONFIG.server.max_body_bytes, 1_024, 10_485_760),
     },
