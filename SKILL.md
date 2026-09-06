@@ -1,7 +1,7 @@
 ---
 name: a2a
 version: 0.1.0
-description: A2A v1.0 inbound server and outbound peer client for Zylos
+description: A2A v1.0 inbound server, outbound peer client, and private agent pairing for Zylos
 type: communication
 
 lifecycle:
@@ -39,10 +39,42 @@ dependencies:
 
 # A2A
 
-Use this skill when another agent must call Zylos through A2A v1.0, or when
+Use this skill when a user asks to connect or pair two Zylos agents, shares a
+one-time A2A invitation, another agent must call Zylos through A2A v1.0, or
 Zylos must discover, call, inspect, or orchestrate A2A peers.
 
-## Outbound commands
+## Conversation-first invariant
+
+The human interface is natural-language conversation. When the user asks to
+generate or accept an invitation, list or revoke a pairing, inspect history,
+discover a peer, or call another agent, perform the corresponding local
+operation yourself and return a concise human-readable result.
+
+Never tell the user to run `node`, paste a shell command, or edit `config.json`
+for a normal A2A operation. The commands below are internal implementation and
+diagnostic tools for the agent. If a required setting is missing, explain the
+missing outcome-level information and apply it yourself after the user supplies
+it.
+
+Map conversational intent as follows:
+
+- "Create/generate an A2A invitation" → run `pair create`, then return the
+  complete invitation only through the user's current private channel.
+- A pasted invitation with an instruction to connect/accept/pair → pass the
+  complete payload to `pair accept` on stdin, save the peer, verify it, and
+  summarize the result without echoing the credential.
+- "Show/list my A2A peers, connections, or invitations" → run `list` and/or
+  `pair list`, then summarize without secrets.
+- "Revoke/remove this invitation or pairing" → follow the runtime's destructive
+  action confirmation policy, then run `pair revoke` for the resolved invitation.
+- "Ask/call/send to <peer>" → resolve the configured peer and run `call`.
+- "Continue <context> with <peer>" → run `call --context`.
+- "Show A2A history" or "discover <peer>" → run `history` or `discover`.
+
+Do not expose raw command syntax unless the user explicitly asks for developer
+or troubleshooting instructions.
+
+## Internal command reference
 
 Messages should be sent on stdin so shell metacharacters remain data:
 
@@ -74,8 +106,8 @@ node ~/zylos/.claude/skills/a2a/scripts/a2a.js pair create --ttl 600
 ```
 
 The complete output is a private, single-use bearer credential. Never post it
-to a group, shared document, issue, log, or other public surface. Send it only
-through the private channel the operator selected.
+to a group, shared document, issue, log, or other public surface. Return it only
+through the current private channel selected by the operator.
 
 Accept an invitation only from stdin; never place it in command arguments:
 
@@ -96,7 +128,8 @@ methods; method-level grants are not implemented.
 `card` prints only the local Agent Card and never includes configured auth
 credentials. Review identity metadata before sharing because all identity fields
 are public. Never share `config.json`, bearer tokens, peer tokens, or pairing
-invitations in a chat or group.
+invitations in a group or shared surface. A pairing invitation may be returned
+through the operator-selected private channel only.
 
 `orchestrate` is experimental and explicit-only. Use it only when the user
 clearly asks to contact multiple agents, compare several peers, or run a
