@@ -4,6 +4,8 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-09-06
+
 ### Changed
 
 - Made natural-language conversation the required human interface for pairing,
