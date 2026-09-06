@@ -85,13 +85,12 @@ test('remote binding is forced back to loopback when no token exists', () => {
   assert.equal(normalized.enabled, false);
 });
 
-test('public Agent Card URLs reject embedded credentials and insecure remote transport', () => {
+test('public Agent Card URLs allow private-network HTTP but reject unsafe URL content', () => {
   assert.throws(
     () => normalizeConfig({ server: { public_url: 'https://user:secret@agent.example.test/a2a' } }),
     /must not contain credentials/,
   );
-  assert.throws(
-    () => normalizeConfig({ server: { public_url: 'http://agent.example.test/a2a' } }),
-    /must use https/,
-  );
+  const normalized = normalizeConfig({ server: { public_url: 'http://10.0.0.8:9900/a2a' } });
+  assert.equal(normalized.server.publicUrl, 'http://10.0.0.8:9900/a2a');
+  assert.throws(() => normalizeConfig({ server: { public_url: 'ftp://agent.example.test/a2a' } }), /must use http or https/);
 });

@@ -4,6 +4,11 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- Allowed an HTTP `server.public_url` for controlled private-network A2A
+  deployments instead of rejecting every non-loopback HTTP address.
+
 ## [0.1.1] - 2026-09-06
 
 ### Changed
