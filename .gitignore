@@ -1,0 +1,14 @@
+node_modules/
+coverage/
+*.log
+.DS_Store
+.env
+.env.*
+config.json
+*.sqlite
+*.sqlite-*
+audit.jsonl
+backups/
+logs/
+components/
+docs/DIRECTORY-DRAFT.md

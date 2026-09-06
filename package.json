@@ -1,0 +1,41 @@
+{
+  "name": "zylos-a2a",
+  "version": "0.1.0",
+  "description": "A2A v1.0 communication component for Zylos",
+  "type": "module",
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test test/*.test.js",
+    "check": "npm test && npm pack --dry-run"
+  },
+  "files": [
+    "CHANGELOG.md",
+    "SECURITY.md",
+    "SKILL.md",
+    "docs/DESIGN.md",
+    "ecosystem.config.cjs",
+    "hooks/",
+    "scripts/",
+    "src/"
+  ],
+  "homepage": "https://github.com/zylos-ai/zylos-a2a#readme",
+  "bugs": {
+    "url": "https://github.com/zylos-ai/zylos-a2a/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zylos-ai/zylos-a2a.git"
+  },
+  "keywords": [
+    "zylos",
+    "a2a",
+    "agent-to-agent",
+    "agent"
+  ],
+  "author": "Zylos AI",
+  "license": "MIT"
+}
