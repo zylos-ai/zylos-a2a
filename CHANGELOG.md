@@ -4,6 +4,22 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- Added short-lived, single-use private pairing invitations. The first
+  successful redeemer is atomically bound, receives a hashed-at-rest per-peer
+  credential under an explicit fixed `a2a:tasks` grant, saves it automatically,
+  and verifies the connection.
+- Added `pair create`, `pair accept`, `pair list`, and `pair revoke` commands;
+  invitation acceptance is stdin-only and bound invitation listings contain no
+  secrets.
+
+### Security
+
+- Added bounded unauthenticated redemption rate limiting, strict pairing input
+  and response validation, generic redemption failures, replay/expiry/revocation
+  enforcement, credential provenance checks, and retained bound audit state.
+
 ## [0.2.0] - 2026-09-06
 
 ### Added

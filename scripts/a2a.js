@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { loadConfig } from '../src/config.js';
 import { callPeer, discoverPeer, orchestrate } from '../src/outbound.js';
+import { acceptPairingInvitation, createPairingInvitation } from '../src/pairing.js';
 import { buildAgentCard } from '../src/protocol.js';
 import { TaskStore } from '../src/store.js';
 
@@ -12,8 +13,13 @@ function usage() {
   a2a.js list
   a2a.js history <context-id> [--peer <peer>] [--limit <n>]
   a2a.js orchestrate <capability> [--mode all|first|best] [message]
+  a2a.js pair create [--ttl <seconds>]
+  a2a.js pair accept [--alias <name>] [--allow-private]
+  a2a.js pair list
+  a2a.js pair revoke <invitation-id>
 
-For call/orchestrate, omit message to read it from stdin.`);
+For call/orchestrate, omit message to read it from stdin.
+Pairing invitations are private credentials. Pass invitations to pair accept on stdin.`);
 }
 
 async function readStdin() {
@@ -32,6 +38,13 @@ function takeOption(args, name, fallback = '') {
   return value;
 }
 
+function takeFlag(args, name) {
+  const index = args.indexOf(name);
+  if (index < 0) return false;
+  args.splice(index, 1);
+  return true;
+}
+
 const args = process.argv.slice(2);
 const command = args.shift();
 if (!command) {
@@ -45,7 +58,8 @@ try {
   let result;
   if (command === 'card') {
     if (args.length !== 0) throw new Error('card does not accept arguments');
-    result = buildAgentCard(config);
+    store = new TaskStore(config.paths.databasePath, { maxTasks: config.protocol.maxTasks });
+    result = buildAgentCard(config, { requireAuthentication: store.hasBoundPeers() });
   } else if (command === 'discover') {
     if (args.length !== 1) throw new Error('discover requires one peer or URL');
     result = await discoverPeer(config, args[0]);
@@ -77,6 +91,33 @@ try {
     const message = args.length > 0 ? args.join(' ') : await readStdin();
     if (!message) throw new Error('orchestrate requires a message on stdin or the command line');
     result = await orchestrate(config, capability, message, { mode });
+  } else if (command === 'pair') {
+    const operation = args.shift();
+    store = new TaskStore(config.paths.databasePath, { maxTasks: config.protocol.maxTasks });
+    if (operation === 'create') {
+      const ttlSeconds = Number(takeOption(args, '--ttl', '600'));
+      if (args.length > 0 || !Number.isInteger(ttlSeconds) || ttlSeconds < 60 || ttlSeconds > 3_600) {
+        throw new Error('pair create --ttl must be an integer from 60 to 3600 seconds');
+      }
+      result = createPairingInvitation(config, store, { ttlSeconds });
+    } else if (operation === 'accept') {
+      const alias = takeOption(args, '--alias');
+      const allowPrivate = takeFlag(args, '--allow-private');
+      if (args.length > 0) throw new Error('invalid pair accept options');
+      if (process.stdin.isTTY) throw new Error('pair accept requires invitation JSON on stdin');
+      const invitation = await readStdin();
+      if (!invitation) throw new Error('pair accept requires invitation JSON on stdin');
+      result = await acceptPairingInvitation(config, store, invitation, { alias, allowPrivate });
+    } else if (operation === 'list') {
+      if (args.length > 0) throw new Error('pair list does not accept arguments');
+      result = store.listPairingInvitations();
+    } else if (operation === 'revoke') {
+      if (args.length !== 1) throw new Error('pair revoke requires one invitation id');
+      result = store.revokePairingInvitation(args[0]);
+      if (!result) throw new Error('pairing invitation not found');
+    } else {
+      throw new Error('pair requires create, accept, list, or revoke');
+    }
   } else {
     throw new Error(`unknown command: ${command}`);
   }

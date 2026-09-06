@@ -64,11 +64,39 @@ message text
 A2AMSG
 ```
 
+## Private pairing
+
+Create a short-lived invitation only when the operator asks to establish a
+peer relationship:
+
+```bash
+node ~/zylos/.claude/skills/a2a/scripts/a2a.js pair create --ttl 600
+```
+
+The complete output is a private, single-use bearer credential. Never post it
+to a group, shared document, issue, log, or other public surface. Send it only
+through the private channel the operator selected.
+
+Accept an invitation only from stdin; never place it in command arguments:
+
+```bash
+cat <<'A2AINVITE' | node ~/zylos/.claude/skills/a2a/scripts/a2a.js pair accept --alias <peer-name>
+complete invitation JSON
+A2AINVITE
+```
+
+Use `--allow-private` only when the operator explicitly intends to connect to a
+controlled private-network peer. `pair list` exposes no secrets. `pair revoke
+<invitation-id>` revokes a pending invitation or the credential issued from a
+bound one. One invitation establishes one-way access from the accepting agent
+to the inviting agent; reverse access requires a separate private invitation.
+The initial fixed `a2a:tasks` grant covers the existing peer-scoped task
+methods; method-level grants are not implemented.
+
 `card` prints only the local Agent Card and never includes configured auth
 credentials. Review identity metadata before sharing because all identity fields
-are public. Never share `config.json`, bearer tokens, or peer tokens in a chat
-or group. The operator must place peer credentials privately in each instance's
-runtime config.
+are public. Never share `config.json`, bearer tokens, peer tokens, or pairing
+invitations in a chat or group.
 
 `orchestrate` is experimental and explicit-only. Use it only when the user
 clearly asks to contact multiple agents, compare several peers, or run a

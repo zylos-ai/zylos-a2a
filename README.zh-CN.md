@@ -14,12 +14,14 @@ Zylos Runtime；任务状态、上下文历史和 Push 配置保存在本地 SQL
   列表、取消和 Push 配置。
 - 支持标准 Agent Card 地址 `/.well-known/agent-card.json` 和旧地址回退。
 - 按 Peer 隔离认证、信任、限流、任务所有权和上下文历史。
+- 支持短时、单次、私密邀请：首次接受者会被绑定，并自动获得独立的长期
+  Peer 凭据。
 - 出站请求固定 DNS 解析结果、拒绝重定向、防 SSRF、响应脱敏、Push
   回调认证、可选 HMAC 签名，以及仅记录元数据的审计日志。
 - 默认只调用一个明确指定的 Peer；实验性多 Agent fan-out 必须显式执行。
 
 组件不自动实现 Agent Directory、自动选 Agent 或跨组织信任。每个 Peer
-都需要由运维人员显式配置并建立双向信任。
+都需要显式配对或配置。
 
 ## 环境要求
 
@@ -86,6 +88,36 @@ zylos add a2a
 `server.public_url` 填写外部可访问的 A2A 根地址。私网 Peer 和私网 Push
 回调默认禁止；只有在受控网络中才应显式开启对应 `allow_private` 配置。
 
+## 一次复制完成单向配对
+
+先在 Agent A 配置 `server.public_url`，再生成一个短时邀请：
+
+```bash
+node ~/zylos/.claude/skills/a2a/scripts/a2a.js pair create --ttl 600
+```
+
+输出的完整 JSON 是私密 Bearer 凭据，只能通过私聊等私密渠道交给 Agent B。
+在 B 侧必须从标准输入接收，避免秘密出现在进程参数中：
+
+```bash
+node ~/zylos/.claude/skills/a2a/scripts/a2a.js pair accept --alias agent-a <<'A2AINVITE'
+在这里粘贴完整邀请 JSON
+A2AINVITE
+```
+
+B 会提交自己的稳定身份；A 原子绑定第一个成功兑换者；B 把签发的长期凭据
+写入权限为 `0600` 的配置后立即验连。邀请会以 bound 状态保留审计信息，但
+不能再次使用。`pair list` 只显示无秘密的邀请状态；`pair revoke
+<invitation-id>` 可以撤销待兑换邀请，或吊销已绑定邀请签发的凭据。
+
+0.1.0 首发版固定记录 `a2a:tasks` 权限，覆盖现有按 Peer 隔离的 A2A 任务
+方法；细粒度授权不在本次配对范围内。若兑换响应在 B 保存前丢失，A 侧仍会
+显示 bound；此时应先撤销原邀请，再创建新邀请，不能重试已消费的秘密。
+
+一份邀请只建立 B → A 的访问。若 A 也需要访问 B，应由 B 再生成一份邀请。
+只有目标位于受控私网时才使用 `pair accept --allow-private`；该许可仅保存到
+本次配对的 Peer。
+
 ## 验证连接
 
 本机 Agent Card 不包含已配置的认证凭据。所有身份字段都会公开，分享前仍应复核其内容：
@@ -105,7 +137,8 @@ A2AMSG
 ```
 
 使用 `--context <context-id>` 延续同一会话；使用 `list` 和 `history` 查看
-本机持久化状态。`orchestrate` 是实验性显式功能，普通调用不会自动 fan-out。
+本机任务状态，使用 `pair list` 查看配对状态。`orchestrate` 是实验性显式
+功能，普通调用不会自动 fan-out。
 
 ## 取消语义
 
