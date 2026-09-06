@@ -4,6 +4,12 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- Made natural-language conversation the required human interface for pairing,
+  peer management, discovery, history, and calls. Node.js commands are now
+  documented only as internal agent and developer diagnostics.
+
 ## [0.1.0] - 2026-09-06
 
 ### Added

@@ -47,7 +47,52 @@ zylos add a2a
 `~/zylos/components/a2a/config.json`。组件默认禁用并只监听本机；请先复核
 身份字段、配置预期的信任策略，再显式启用。升级时会保留运行配置和持久化数据。
 
-## 配置 Peer
+## 通过对话使用 A2A
+
+日常 A2A 操作以对话为入口。人不需要运行 Node.js 命令，也不需要手动编辑
+`config.json`；只需告诉 Zylos Agent 想完成什么，Agent 会在内部调用本组件的
+本地工具，并返回便于理解的结果。
+
+### 为两个 Agent 配对
+
+在与 Agent A 的私聊中说，例如：
+
+> 生成一份 10 分钟内有效的一次性 A2A 邀请。
+
+Agent A 会返回一份私密邀请。通过私密渠道把完整邀请交给 Agent B，然后说：
+
+> 接受这份 A2A 邀请，并把对方保存为 agent-a。
+
+Agent B 会接受邀请、保存签发的凭据并自动验连。一份邀请只建立 B → A 的
+访问；若 A 也需要访问 B，让 B 再生成一份邀请并私下交给 A。
+
+邀请是短时 Bearer 凭据，禁止发到群聊、共享文档、Issue 或日志。如果接受
+响应在保存前丢失，让 Agent A 撤销已绑定邀请并重新生成；已消费的邀请不能
+重试。
+
+### 调用和管理 Peer
+
+后续操作也直接用自然语言，例如：
+
+> 查看我当前的 A2A Peer 和配对邀请。
+
+> 请 research-agent 概述它当前可以提供的能力。
+
+> 延续 research-agent 的上下文 8a4e，询问最终结果。
+
+> 撤销邀请 91c… 以及它签发的凭据。
+
+Agent 会识别意图，在内部完成本地操作，并在不暴露已保存凭据的前提下总结
+结果。撤销属于破坏性操作，遵循系统既有的确认规则。多 Agent fan-out 仍为
+实验功能，只有人在对话中明确要求同时联系多个 Agent 时才会执行。
+
+0.1.0 首发版固定记录 `a2a:tasks` 权限，覆盖现有按 Peer 隔离的 A2A 任务
+方法；细粒度授权不在本次配对范围内。
+
+## 高级运维配置
+
+手工配置仅供运维和开发者参考，并不是普通用户的必经步骤；用户也可以让
+Agent 代为应用相同设置。
 
 下面是一个双向信任 Peer 的最小示例。两个方向应使用不同的强随机 Token，
 并且只通过私密渠道交换。
@@ -88,39 +133,27 @@ zylos add a2a
 `server.public_url` 填写外部可访问的 A2A 根地址。私网 Peer 和私网 Push
 回调默认禁止；只有在受控网络中才应显式开启对应 `allow_private` 配置。
 
-## 一次复制完成单向配对
+## 开发与排障 CLI
 
-先在 Agent A 配置 `server.public_url`，再生成一个短时邀请：
+本节命令是 Agent 和开发者使用的内部实现与诊断接口，不是普通用户必须执行
+的步骤。Agent 接受邀请时必须从标准输入传入邀请，避免秘密出现在进程参数中。
+
+创建和接受私密邀请：
 
 ```bash
 node ~/zylos/.claude/skills/a2a/scripts/a2a.js pair create --ttl 600
-```
 
-输出的完整 JSON 是私密 Bearer 凭据，只能通过私聊等私密渠道交给 Agent B。
-在 B 侧必须从标准输入接收，避免秘密出现在进程参数中：
-
-```bash
 node ~/zylos/.claude/skills/a2a/scripts/a2a.js pair accept --alias agent-a <<'A2AINVITE'
 在这里粘贴完整邀请 JSON
 A2AINVITE
 ```
 
-B 会提交自己的稳定身份；A 原子绑定第一个成功兑换者；B 把签发的长期凭据
-写入权限为 `0600` 的配置后立即验连。邀请会以 bound 状态保留审计信息，但
-不能再次使用。`pair list` 只显示无秘密的邀请状态；`pair revoke
+只有目标位于受控私网时才为 `pair accept` 增加 `--allow-private`；该许可仅保存
+到本次配对的 Peer。`pair list` 只显示无秘密的邀请状态；`pair revoke
 <invitation-id>` 可以撤销待兑换邀请，或吊销已绑定邀请签发的凭据。
 
-0.1.0 首发版固定记录 `a2a:tasks` 权限，覆盖现有按 Peer 隔离的 A2A 任务
-方法；细粒度授权不在本次配对范围内。若兑换响应在 B 保存前丢失，A 侧仍会
-显示 bound；此时应先撤销原邀请，再创建新邀请，不能重试已消费的秘密。
-
-一份邀请只建立 B → A 的访问。若 A 也需要访问 B，应由 B 再生成一份邀请。
-只有目标位于受控私网时才使用 `pair accept --allow-private`；该许可仅保存到
-本次配对的 Peer。
-
-## 验证连接
-
-本机 Agent Card 不包含已配置的认证凭据。所有身份字段都会公开，分享前仍应复核其内容：
+本机 Agent Card 不包含已配置的认证凭据。所有身份字段都会公开，分享前仍应
+复核其内容：
 
 ```bash
 node ~/zylos/.claude/skills/a2a/scripts/a2a.js card

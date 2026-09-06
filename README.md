@@ -53,7 +53,59 @@ The component is disabled and bound to localhost by default; enable it only
 after reviewing the identity fields and configuring the intended trust policy.
 Runtime data is preserved across upgrades.
 
-## Configure peers
+## Use A2A through conversation
+
+Normal A2A work is conversation-first. A person should not need to run a
+Node.js command or edit `config.json`. Tell the Zylos agent what outcome you
+want; the agent uses this component's local tools internally and returns a
+human-readable result.
+
+### Pair two agents
+
+In a private conversation with agent A, say for example:
+
+> Create a one-time A2A invitation valid for 10 minutes.
+
+Agent A returns a private invitation. Send the complete invitation to agent B
+through a private channel, then say:
+
+> Accept this A2A invitation and save the peer as agent-a.
+
+Agent B accepts the invitation, saves the issued credential, and verifies the
+connection. One invitation grants B access to A only. If A also needs access
+to B, ask B to create a second invitation and give it privately to A.
+
+Invitations are short-lived bearer credentials. Never post one in a group,
+shared document, issue, or log. If an acceptance response is lost, ask agent A
+to revoke the bound invitation and create a new one; a consumed invitation
+cannot be retried.
+
+### Call and manage peers
+
+Continue in natural language, for example:
+
+> Show my current A2A peers and pairing invitations.
+
+> Ask research-agent to summarize its current capabilities.
+
+> Continue context 8a4e with research-agent and ask for the final result.
+
+> Revoke invitation 91c… and the credential it issued.
+
+The agent resolves the intent, runs the local operation internally, and
+summarizes the result without exposing stored credentials. Revocation follows
+the normal confirmation policy for destructive actions. Multi-agent fan-out is
+experimental and runs only when the person explicitly asks to contact several
+agents.
+
+Version 0.1.0 records one fixed `a2a:tasks` permission, covering the existing
+peer-scoped A2A task methods. Scoped grants are deliberately outside this first
+pairing flow.
+
+## Advanced operator configuration
+
+Manual configuration is optional and intended for operators or developers.
+Normal users can ask their agent to apply the same settings.
 
 The example below shows reciprocal trust with one peer. Use distinct random
 tokens in each direction and exchange them only through a private channel.
@@ -95,47 +147,31 @@ Keep `server.host` on localhost when a reverse proxy terminates TLS. Set
 peers and private push callbacks stay blocked unless their explicit
 `allow_private` controls are enabled for a controlled network.
 
-## Pair with one private copy
+## Developer and troubleshooting CLI
 
-On agent A, create a short-lived invitation after configuring
-`server.public_url`:
+The commands in this section are implementation and diagnostic interfaces for
+agents and developers. They are not steps that a normal user must run. When an
+agent accepts an invitation, it must pass the payload on stdin so the secret
+never appears in process arguments.
+
+Create and accept a private invitation:
 
 ```bash
 node ~/zylos/.claude/skills/a2a/scripts/a2a.js pair create --ttl 600
-```
 
-The JSON output is a private bearer credential. Send the complete output to
-agent B through a private channel only. On B, pass the invitation on stdin so
-the secret never appears in process arguments:
-
-```bash
 node ~/zylos/.claude/skills/a2a/scripts/a2a.js pair accept --alias agent-a <<'A2AINVITE'
 paste the complete invitation JSON here
 A2AINVITE
 ```
 
-B submits its stable local identity, A atomically binds the first successful
-redeemer, and B saves the issued credential in its mode-`0600` config before
-verifying it. The invitation remains visible as bound audit state but cannot be
-replayed. `pair list` shows invitation state without secrets; `pair revoke
-<invitation-id>` revokes a pending invitation or the credential issued from a
-bound invitation.
-
-Version 0.1.0 records one fixed `a2a:tasks` permission, covering the existing
-peer-scoped A2A task methods. Scoped grants are deliberately outside this first
-pairing flow. If the redemption response is lost before B saves it, A will show
-the invitation as bound; revoke it and create a new invitation rather than
-retrying the consumed secret.
-
-One invitation grants B access to A only. Create a second invitation on B if A
-also needs access to B. Add `--allow-private` to `pair accept` only for a
-controlled private-network destination; that allowance is saved only on the
-paired Peer.
-
-## Verify a connection
+Add `--allow-private` to `pair accept` only for a controlled private-network
+destination; that allowance is saved only on the paired Peer. `pair list`
+shows invitation state without secrets. `pair revoke <invitation-id>` revokes a
+pending invitation or the credential issued from a bound invitation.
 
 The local Agent Card never includes configured authentication credentials.
-Review identity metadata before sharing it because every identity field is public:
+Review identity metadata before sharing it because every identity field is
+public:
 
 ```bash
 node ~/zylos/.claude/skills/a2a/scripts/a2a.js card
@@ -153,8 +189,8 @@ A2AMSG
 
 Continue an existing conversation with `--context <context-id>`. Use `list`
 and `history` to inspect local task state, and `pair list` for pairing state.
-The `orchestrate` command is
-experimental and must be invoked explicitly; ordinary calls never fan out.
+The `orchestrate` command is experimental and must be invoked explicitly;
+ordinary calls never fan out.
 
 ## Cancellation semantics
 
