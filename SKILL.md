@@ -1,6 +1,6 @@
 ---
 name: a2a
-version: 0.1.1
+version: 0.1.2
 description: A2A v1.0 inbound server, outbound peer client, and private agent pairing for Zylos
 type: communication
 

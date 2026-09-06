@@ -4,6 +4,8 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-09-06
+
 ### Fixed
 
 - Allowed an HTTP `server.public_url` for controlled private-network A2A
